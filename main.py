@@ -44,19 +44,30 @@ class Player(pygame.sprite.Sprite):
         self.health = 10
         self.max_health = 10
         self.regen_speed = 0.2
-        self.speed = 15
+        self.speed = 10
         self.exp = 0
         self.skills = {'magic shot': {'level': 1, 'reload': 2}, 'fireball': {'level': 0, 'reload': 5}}
 
-    def update(self, dx, dy):
+    def update(self, dx, dy, infinity_world):
         if abs(dx) + abs(dy) == 2:
             dx *= 0.7071
             dy *= 0.7071
 
         for sprite in all_sprites:
-            if sprite != self and isinstance(sprite, (Tile, Enemy)):
+            if sprite != self and isinstance(sprite, (Enemy, MagicShot)):
                 sprite.rect.x -= dx * self.speed
                 sprite.rect.y -= dy * self.speed
+
+        targ_tile = min(tiles_group, key=lambda tile: (tile.rect.x, tile.rect.y))
+        infinity_world.tiles_arr.remove(targ_tile)
+        targ_tile.rect.x -= dx * self.speed
+        targ_tile.rect.y -= dy * self.speed
+        infinity_world.tiles_arr.insert(0, targ_tile)
+        for y in range(infinity_world.tiles_y):
+            for x in range(infinity_world.tiles_x):
+                if x + y == 0: continue
+                infinity_world.tiles_arr[y * infinity_world.tiles_x + x].rect.x = targ_tile.rect.x + x * infinity_world.tile_size
+                infinity_world.tiles_arr[y * infinity_world.tiles_x + x].rect.y = targ_tile.rect.y + y * infinity_world.tile_size
 
         if self.health < self.max_health:
             self.health += 1 / FPS * self.regen_speed
@@ -95,7 +106,6 @@ class MagicShot(pygame.sprite.Sprite):
     def update(self):
         self.rect.x += self.direction[0] * self.speed
         self.rect.y += self.direction[1] * self.speed
-        # Удалить, если выходит за экран
         if not screen.get_rect().colliderect(self.rect):
             self.kill()
 
@@ -123,38 +133,37 @@ class Tile(pygame.sprite.Sprite):
 
 
 class InfinityWorld:
-    def __init__(self, tile_size=128, render_distance=9):
-        self.tile_size = tile_size  # размер тайла в пикселях
-        self.render_distance = render_distance  # расстояние в тайлах от игрока
+    def __init__(self, tile_size=128, buffer=2):
+        self.tile_size = tile_size
+        self.buffer = buffer
 
-        num_tiles_x = width // tile_size + 4
-        num_tiles_y = height // tile_size + 4
+        self.tiles_x = width // tile_size + 2 * buffer
+        self.tiles_y = height // tile_size + 2 * buffer
+        self.tiles_arr = []
 
-        for x in range(-2, num_tiles_x):
-            for y in range(-2, num_tiles_y):
+        for y in range(-buffer, self.tiles_y - buffer):
+            for x in range(-buffer, self.tiles_x - buffer):
                 tile = Tile()
                 tile.rect.x = x * tile_size
                 tile.rect.y = y * tile_size
+                self.tiles_arr.append(tile)
+
+        self.left_bound = -self.tile_size * buffer
+        self.right_bound = self.tiles_x * tile_size
+        self.top_bound = -self.tile_size * buffer
+        self.bottom_bound = self.tiles_y * tile_size
 
     def update_tiles(self):
-        # Границы экрана с учетом размера тайла и запаса
-        left_bound = -self.tile_size * 2
-        right_bound = width + self.tile_size * 2
-        top_bound = -self.tile_size * 2
-        bottom_bound = height + self.tile_size * 2
-
         for tile in tiles_group:
-            # Перемещение по оси X
-            if tile.rect.x < left_bound:
-                tile.rect.x += (width + self.tile_size * 2)
-            elif tile.rect.x > right_bound:
-                tile.rect.x -= (width + self.tile_size * 2)
+            if tile.rect.x < self.left_bound:
+                tile.rect.x = (self.tiles_x + self.buffer) * self.tile_size
+            elif tile.rect.x + self.tile_size * self.buffer > self.right_bound:
+                tile.rect.x = -self.buffer * self.tile_size
 
-            # Перемещение по оси Y
-            if tile.rect.y < top_bound:
-                tile.rect.y += (height + self.tile_size * 2)
-            elif tile.rect.y > bottom_bound:
-                tile.rect.y -= (height + self.tile_size * 2)
+            if tile.rect.y < self.top_bound:
+                tile.rect.y += (self.tiles_y + self.buffer) * self.tile_size
+            elif tile.rect.y + self.tile_size * self.buffer > self.bottom_bound:
+                tile.rect.y = -self.buffer * self.tile_size
 
 
 clock = pygame.time.Clock()
@@ -174,11 +183,14 @@ while running:
     dx = keys[pygame.K_d] - keys[pygame.K_a]
     dy = keys[pygame.K_s] - keys[pygame.K_w]
 
-    player.update(dx, dy)
+    player.update(dx, dy, infinity_world)
     infinity_world.update_tiles()
 
     screen.fill((0, 0, 0))
     tiles_group.draw(screen)
+    for tile in tiles_group:
+        pass
+
     player_group.draw(screen)
 
     clock.tick(60)
