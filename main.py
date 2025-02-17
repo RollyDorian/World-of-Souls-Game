@@ -1,6 +1,7 @@
 import pygame
 import os
 import sys
+import random
 
 all_sprites = pygame.sprite.Group()
 player_group = pygame.sprite.Group()
@@ -33,22 +34,56 @@ def load_image(name, colorkey=None):
 class Player(pygame.sprite.Sprite):
     def __init__(self):
         super().__init__(all_sprites, player_group)
-        self.image = load_image('player.png')
-        self.rect = self.image.get_rect()
+        self.frames = {}
+        self.cur_frame = 0
+        self.cut_sheet(load_image('player_standing.png'), 2, 1, 'standing')
+        self.cut_sheet(load_image('player_running.png'), 2, 1, 'running')
+        self.cut_sheet(load_image('player_flying.png'), 2, 1, 'flying_r')
+        flying_l = load_image('player_flying.png')
+        flying_l = pygame.transform.flip(flying_l, True, False)
+        self.cut_sheet(flying_l, 2, 1, 'flying_l')
+        self.image = self.frames['standing'][self.cur_frame]
+        self.ticks_counter = 0
         self.rect.centerx = screen.width // 2
         self.rect.centery = screen.height // 2
-        self.frame_number = 0
-        self.animation_type = {'standing': 1, 'running_right': 1, 'running_left': 1, 'dying': 3}
-        self.abs_coords = [0, 0]
 
         self.health = 10
         self.max_health = 10
         self.regen_speed = 0.2
-        self.speed = 10
+        self.speed = 8
         self.exp = 0
         self.skills = {'magic shot': {'level': 1, 'reload': 2}, 'fireball': {'level': 0, 'reload': 5}}
 
     def update(self, dx, dy, infinity_world):
+        self.ticks_counter += 1
+        anim_type = 'standing'
+        if abs(dx) + abs(dy) == 0:
+            anim_type = 'standing'
+            self.image = self.frames[anim_type][self.cur_frame]
+        elif dx > 0:
+            anim_type = 'flying_r'
+            self.image = self.frames[anim_type][self.cur_frame]
+        elif dx < 0:
+            anim_type = 'flying_l'
+            self.image = self.frames[anim_type][self.cur_frame]
+        elif dx == 0 and dy != 0:
+            anim_type = 'running'
+            self.image = self.frames[anim_type][self.cur_frame]
+        if anim_type != 'standing':
+            if self.ticks_counter % 20 == 0:
+                self.cur_frame = (self.cur_frame + 1) % len(self.frames[anim_type])
+                self.image = self.frames[anim_type][self.cur_frame]
+                self.ticks_counter = 0
+        else:
+            if self.cur_frame == 0 and self.ticks_counter == 60:
+                self.cur_frame = (self.cur_frame + 1) % len(self.frames[anim_type])
+                self.image = self.frames[anim_type][self.cur_frame]
+                self.ticks_counter = 0
+            elif self.cur_frame and self.ticks_counter == 10:
+                self.cur_frame = (self.cur_frame + 1) % len(self.frames[anim_type])
+                self.image = self.frames[anim_type][self.cur_frame]
+
+
         if abs(dx) + abs(dy) == 2:
             dx *= 0.7071
             dy *= 0.7071
@@ -66,8 +101,10 @@ class Player(pygame.sprite.Sprite):
         for y in range(infinity_world.tiles_y):
             for x in range(infinity_world.tiles_x):
                 if x + y == 0: continue
-                infinity_world.tiles_arr[y * infinity_world.tiles_x + x].rect.x = targ_tile.rect.x + x * infinity_world.tile_size
-                infinity_world.tiles_arr[y * infinity_world.tiles_x + x].rect.y = targ_tile.rect.y + y * infinity_world.tile_size
+                infinity_world.tiles_arr[
+                    y * infinity_world.tiles_x + x].rect.x = targ_tile.rect.x + x * infinity_world.tile_size
+                infinity_world.tiles_arr[
+                    y * infinity_world.tiles_x + x].rect.y = targ_tile.rect.y + y * infinity_world.tile_size
 
         if self.health < self.max_health:
             self.health += 1 / FPS * self.regen_speed
@@ -77,22 +114,55 @@ class Player(pygame.sprite.Sprite):
             pass
             '''skill.use()'''
 
+    def cut_sheet(self, sheet, columns, rows, type):
+        self.frames[type] = []
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                frame_location = (self.rect.w * i, self.rect.h * j)
+                self.frames[type].append(sheet.subsurface(pygame.Rect(
+                    frame_location, self.rect.size)))
+
 
 class Enemy(pygame.sprite.Sprite):
-    def __init__(self, player):
+    def __init__(self, player, columns, rows, coords):
         super().__init__(all_sprites, enemy_group)
-        self.image = load_image('enemy.png')
-        self.rect = self.image.get_rect()
-        self.speed = 2
+        self.frames = []
+        self.cut_sheet(load_image('enemy1.png'), columns, rows)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        x, y = coords
+        self.rect = self.rect.move(x, y)
         self.player = player
+        self.speed = 3
+        self.ticks_counter = 0
+        self.health = 3
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                frame_location = (self.rect.w * i, self.rect.h * j)
+                self.frames.append(sheet.subsurface(pygame.Rect(
+                    frame_location, self.rect.size)))
 
     def update(self):
-        dx = self.player.rect.x - self.rect.x
-        dy = self.player.rect.y - self.rect.y
+        self.ticks_counter += 1
+        if self.ticks_counter % 8 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+
+        dx = self.player.rect.centerx - self.rect.centerx
+        dy = self.player.rect.centery - self.rect.centery
         distance = (dx ** 2 + dy ** 2) ** 0.5
         if distance != 0:
-            self.rect.x += (dx / distance) * self.speed / FPS
-            self.rect.y += (dy / distance) * self.speed / FPS
+            self.rect.x += self.speed / distance * dx
+            self.rect.y += self.speed / distance * dy
+
+        if self.health <= 0:
+            self.kill()
 
 
 class MagicShot(pygame.sprite.Sprite):
@@ -101,7 +171,7 @@ class MagicShot(pygame.sprite.Sprite):
         self.image = load_image('magic_shot.png')
         self.rect = self.image.get_rect(center=start_pos)
         self.speed = 8
-        self.direction = direction  # нормализованный вектор (dx, dy)
+        self.direction = direction  # вектор (dx, dy)
 
     def update(self):
         self.rect.x += self.direction[0] * self.speed
@@ -165,14 +235,29 @@ class InfinityWorld:
             elif tile.rect.y + self.tile_size * self.buffer > self.bottom_bound:
                 tile.rect.y = -self.buffer * self.tile_size
 
+def get_random_pos_enemy():
+    # рандомная точка окружности, смещенной в центр экрана
+    r = width ** 2 + height ** 2
+    r = r ** 0.5 // 2
+    x = random.randint(width // 2 - int(r), width // 2 + int(r))
+    # значение функции на окружности при рандомном x
+    y = height // 2 + random.choice([-1, 1]) * (r ** 2 - (x - width // 2) ** 2) ** 0.5
+    return x, y
+
 
 clock = pygame.time.Clock()
 running = True
 player = Player()
 infinity_world = InfinityWorld()
-
+enemy_spawn_rate = 1
+enemy_spawn_count = 50
+ticks_counter = 0
+enemy_ticks_counter = 0
+starting_time = pygame.time.get_ticks()
+enemies_arr = []
 while running:
-    dt = clock.tick(FPS) / 1000
+    enemy_ticks_counter += 1
+    current_time = pygame.time.get_ticks()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -185,12 +270,27 @@ while running:
 
     player.update(dx, dy, infinity_world)
     infinity_world.update_tiles()
+    for enemy in enemies_arr:
+        enemy.update()
+    hits = pygame.sprite.groupcollide(enemy_group, attacks_group, True, True)
+    for enemy in hits:
+        player.exp += 10
+
+    for enemy in pygame.sprite.groupcollide(enemy_group, player_group, False, False):
+        player.health -= 0.05
+        enemy.health -= 0.05
+
+    next_enemy = FPS // enemy_spawn_rate
+    if enemy_spawn_count:
+        if enemy_ticks_counter == next_enemy:
+            enemy_ticks_counter = 0
+            enemy_spawn_count -= 1
+            enemies_arr.append(Enemy(player, 2, 1, get_random_pos_enemy()))
+            enemy_spawn_rate += 0.01
 
     screen.fill((0, 0, 0))
     tiles_group.draw(screen)
-    for tile in tiles_group:
-        pass
-
+    enemy_group.draw(screen)
     player_group.draw(screen)
 
     clock.tick(60)
