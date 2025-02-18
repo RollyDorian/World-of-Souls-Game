@@ -46,6 +46,7 @@ class Player(pygame.sprite.Sprite):
         self.ticks_counter = 0
         self.rect.centerx = screen.width // 2
         self.rect.centery = screen.height // 2
+        self.mask = pygame.mask.from_surface(self.image)
 
         self.health = 10
         self.max_health = 10
@@ -82,7 +83,6 @@ class Player(pygame.sprite.Sprite):
             elif self.cur_frame and self.ticks_counter == 10:
                 self.cur_frame = (self.cur_frame + 1) % len(self.frames[anim_type])
                 self.image = self.frames[anim_type][self.cur_frame]
-
 
         if abs(dx) + abs(dy) == 2:
             dx *= 0.7071
@@ -128,14 +128,18 @@ class Player(pygame.sprite.Sprite):
 class Enemy(pygame.sprite.Sprite):
     def __init__(self, player, columns, rows, coords):
         super().__init__(all_sprites, enemy_group)
+        x, y = coords
         self.frames = []
         self.cut_sheet(load_image('enemy1.png'), columns, rows)
         self.cur_frame = 0
         self.image = self.frames[self.cur_frame]
-        x, y = coords
         self.rect = self.rect.move(x, y)
         self.player = player
-        self.speed = 3
+        self.mask = pygame.mask.from_surface(self.image)
+        self.velocity = pygame.math.Vector2(0, 0)
+        self.max_speed = 2.5
+        self.acceleration = pygame.math.Vector2(0, 0)
+        self.separation_radius = 40
         self.ticks_counter = 0
         self.health = 3
 
@@ -154,15 +158,40 @@ class Enemy(pygame.sprite.Sprite):
             self.cur_frame = (self.cur_frame + 1) % len(self.frames)
             self.image = self.frames[self.cur_frame]
 
-        dx = self.player.rect.centerx - self.rect.centerx
-        dy = self.player.rect.centery - self.rect.centery
-        distance = (dx ** 2 + dy ** 2) ** 0.5
-        if distance != 0:
-            self.rect.x += self.speed / distance * dx
-            self.rect.y += self.speed / distance * dy
+        target_vec = pygame.math.Vector2(self.player.rect.center)
+        current_vec = pygame.math.Vector2(self.rect.center)
 
+        desired_dir = (target_vec - current_vec).normalize() * self.max_speed
+        self.acceleration = desired_dir - self.velocity
+        self.velocity += self.acceleration * 0.15
+
+        self.apply_separation()
+        self.rect.center += self.velocity
+
+        if pygame.sprite.collide_mask(self, self.player):
+            # Наносим урон игроку
+            self.player.health -= 0.5 * (1 / FPS)
+            # Мягкое отталкивание
+            diff = pygame.math.Vector2(self.rect.center) - self.player.rect.center
+            self.velocity += diff.normalize() * 0.3
         if self.health <= 0:
             self.kill()
+
+    def apply_separation(self):
+        separation_force = pygame.math.Vector2(0, 0)
+        neighbors = pygame.sprite.spritecollide(
+            self, enemy_group, False,
+            lambda a, b: a != b and a.rect.colliderect(b.rect)
+        )
+
+        for neighbor in neighbors:
+            diff = pygame.math.Vector2(self.rect.center) - neighbor.rect.center
+            distance = diff.magnitude()
+            if 0 < distance < self.separation_radius:
+                strength = (1 - distance / self.separation_radius) * 1.2
+                separation_force += diff.normalize() * strength
+
+        self.velocity += separation_force
 
 
 class MagicShot(pygame.sprite.Sprite):
@@ -171,7 +200,7 @@ class MagicShot(pygame.sprite.Sprite):
         self.image = load_image('magic_shot.png')
         self.rect = self.image.get_rect(center=start_pos)
         self.speed = 8
-        self.direction = direction  # вектор (dx, dy)
+        self.direction = direction
 
     def update(self):
         self.rect.x += self.direction[0] * self.speed
@@ -235,6 +264,7 @@ class InfinityWorld:
             elif tile.rect.y + self.tile_size * self.buffer > self.bottom_bound:
                 tile.rect.y = -self.buffer * self.tile_size
 
+
 def get_random_pos_enemy():
     # рандомная точка окружности, смещенной в центр экрана
     r = width ** 2 + height ** 2
@@ -255,6 +285,7 @@ ticks_counter = 0
 enemy_ticks_counter = 0
 starting_time = pygame.time.get_ticks()
 enemies_arr = []
+CELL_SIZE = 256
 while running:
     enemy_ticks_counter += 1
     current_time = pygame.time.get_ticks()
@@ -270,14 +301,20 @@ while running:
 
     player.update(dx, dy, infinity_world)
     infinity_world.update_tiles()
-    for enemy in enemies_arr:
+
+    spatial_grid = {}
+    for enemy in enemy_group:
+        cell = (enemy.rect.x // CELL_SIZE, enemy.rect.y // CELL_SIZE)
+        if cell not in spatial_grid:
+            spatial_grid[cell] = []
+        spatial_grid[cell].append(enemy)
+    for enemy in enemy_group:
         enemy.update()
     hits = pygame.sprite.groupcollide(enemy_group, attacks_group, True, True)
     for enemy in hits:
         player.exp += 10
 
     for enemy in pygame.sprite.groupcollide(enemy_group, player_group, False, False):
-        player.health -= 0.05
         enemy.health -= 0.05
 
     next_enemy = FPS // enemy_spawn_rate
