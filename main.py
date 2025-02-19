@@ -1,6 +1,7 @@
 import pygame
 import os
 import sys
+import math
 import random
 
 all_sprites = pygame.sprite.Group()
@@ -8,6 +9,7 @@ player_group = pygame.sprite.Group()
 tiles_group = pygame.sprite.Group()
 enemy_group = pygame.sprite.Group()
 attacks_group = pygame.sprite.Group()
+effects_group = pygame.sprite.Group()
 pygame.init()
 size = width, height = 1300, 800
 screen = pygame.display.set_mode(size)
@@ -53,7 +55,6 @@ class Player(pygame.sprite.Sprite):
         self.regen_speed = 0.2
         self.speed = 8
         self.exp = 0
-        self.skills = {'magic shot': {'level': 1, 'reload': 2}, 'fireball': {'level': 0, 'reload': 5}}
 
     def update(self, dx, dy, infinity_world):
         self.ticks_counter += 1
@@ -89,9 +90,12 @@ class Player(pygame.sprite.Sprite):
             dy *= 0.7071
 
         for sprite in all_sprites:
-            if sprite != self and isinstance(sprite, (Enemy, MagicShot)):
+            if sprite != self and isinstance(sprite, Enemy):
                 sprite.rect.x -= dx * self.speed
                 sprite.rect.y -= dy * self.speed
+        for sprite in attacks_group:
+            if sprite != self and isinstance(sprite, MagicShot):
+                sprite.pos -= pygame.math.Vector2(dx, dy) * self.speed
 
         targ_tile = min(tiles_group, key=lambda tile: (tile.rect.x, tile.rect.y))
         infinity_world.tiles_arr.remove(targ_tile)
@@ -109,10 +113,6 @@ class Player(pygame.sprite.Sprite):
         if self.health < self.max_health:
             self.health += 1 / FPS * self.regen_speed
             self.health = self.max_health if self.health > self.max_health else self.health
-
-        for skill in self.skills:
-            pass
-            '''skill.use()'''
 
     def cut_sheet(self, sheet, columns, rows, type):
         self.frames[type] = []
@@ -160,8 +160,11 @@ class Enemy(pygame.sprite.Sprite):
 
         target_vec = pygame.math.Vector2(self.player.rect.center)
         current_vec = pygame.math.Vector2(self.rect.center)
+        desired_vec = target_vec - current_vec
+        if desired_vec.magnitude() == 0:
+            desired_vec += (1, 1)
 
-        desired_dir = (target_vec - current_vec).normalize() * self.max_speed
+        desired_dir = desired_vec.normalize() * self.max_speed
         self.acceleration = desired_dir - self.velocity
         self.velocity += self.acceleration * 0.15
 
@@ -173,6 +176,8 @@ class Enemy(pygame.sprite.Sprite):
             self.player.health -= 0.5 * (1 / FPS)
             # Мягкое отталкивание
             diff = pygame.math.Vector2(self.rect.center) - self.player.rect.center
+            if diff.magnitude() == 0:
+                diff += (1, 1)
             self.velocity += diff.normalize() * 0.3
         if self.health <= 0:
             self.kill()
@@ -190,30 +195,85 @@ class Enemy(pygame.sprite.Sprite):
             if 0 < distance < self.separation_radius:
                 strength = (1 - distance / self.separation_radius) * 1.2
                 separation_force += diff.normalize() * strength
-
         self.velocity += separation_force
 
 
 class MagicShot(pygame.sprite.Sprite):
-    def __init__(self, start_pos, direction):
+    def __init__(self, start_pos, direction, damage):
         super().__init__(all_sprites, attacks_group)
-        self.image = load_image('magic_shot.png')
-        self.rect = self.image.get_rect(center=start_pos)
-        self.speed = 8
-        self.direction = direction
+        self.speed = 15
+        self.frames = []
+        self.direction = pygame.math.Vector2(direction).normalize()
+        self.cut_sheet(load_image('magic_shot.png'), 14, 9)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.damage = damage
+        self.ticks_counter = 0
+        self.rect.center = start_pos
+        self.mask = pygame.mask.from_surface(self.image)
+        self.pos = pygame.Vector2(self.rect.center)
 
-    def update(self):
-        self.rect.x += self.direction[0] * self.speed
-        self.rect.y += self.direction[1] * self.speed
-        if not screen.get_rect().colliderect(self.rect):
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                if j == 2:
+                    angle = math.degrees(math.atan2(-self.direction.y, self.direction.x))
+                    frame_location = (self.rect.w * i, self.rect.h * j)
+                    image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                    image = pygame.transform.rotate(image, angle)
+                    self.frames.append(image)
+
+    def update(self, dt):
+        self.ticks_counter += 1
+        if self.ticks_counter % 4 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+
+        self.pos += self.direction * self.speed
+        self.rect.center = (int(self.pos.x), int(self.pos.y))
+
+        if not (-100 < self.pos.x < width + 100 and -100 < self.pos.y < height + 100):
             self.kill()
 
+        for enemy in enemy_group:
+            if pygame.sprite.collide_mask(self, enemy):
+                enemy.health -= self.damage
+                self.kill()
 
-def level_up_skill(self, skill_name):
-    if self.exp >= 100:
-        self.skills[skill_name]['level'] += 1
-        self.skills[skill_name]['reload'] *= 0.9  # уменьшение перезарядки
-        self.exp -= 100
+
+class AttackSystem:
+    def __init__(self, player, enemy_group):
+        self.player = player
+        self.enemy_group = enemy_group
+        self.attacks = {
+            'magic_shot': {
+                'level': 1,
+                'cooldown': 1.2,
+                'damage': 10,
+                'shots_count': 1,
+                'timer': 0.0,
+                'action': self.create_ms
+            }
+        }
+
+    def update(self, dt):
+        for attack in self.attacks.values():
+            attack['timer'] += dt
+            if attack['timer'] >= attack['cooldown'] * (0.9 ** attack['level']):
+                for _ in range(attack['shots_count']):
+                    attack['action']()  # qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+                attack['timer'] = 0.0
+
+    def create_ms(self):
+        angle = random.uniform(0, 2 * math.pi)
+        if enemy_group:
+            nearest_enemy = min(self.enemy_group,
+                                key=lambda enemy: pygame.math.Vector2(self.player.rect.center).distance_to(
+                                    enemy.rect.center))
+            direction = pygame.math.Vector2(nearest_enemy.rect.center) - self.player.rect.center
+            MagicShot(self.player.rect.center, direction, self.attacks['magic_shot']['damage'])
 
 
 def draw_health_bar(screen, player):
@@ -280,12 +340,13 @@ running = True
 player = Player()
 infinity_world = InfinityWorld()
 enemy_spawn_rate = 1
-enemy_spawn_count = 50
+enemy_spawn_count = 500
 ticks_counter = 0
 enemy_ticks_counter = 0
 starting_time = pygame.time.get_ticks()
 enemies_arr = []
 CELL_SIZE = 256
+attack_system = AttackSystem(player, enemy_group)
 while running:
     enemy_ticks_counter += 1
     current_time = pygame.time.get_ticks()
@@ -324,11 +385,15 @@ while running:
             enemy_spawn_count -= 1
             enemies_arr.append(Enemy(player, 2, 1, get_random_pos_enemy()))
             enemy_spawn_rate += 0.01
+    attack_system.update(1 / FPS)
+    for attack in attacks_group:
+        attack.update(1 / FPS)
 
     screen.fill((0, 0, 0))
     tiles_group.draw(screen)
     enemy_group.draw(screen)
     player_group.draw(screen)
+    attacks_group.draw(screen)
 
     clock.tick(60)
     pygame.display.flip()
