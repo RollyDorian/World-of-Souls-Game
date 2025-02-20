@@ -630,6 +630,11 @@ def terminate():
     sys.exit()
 
 
+if not os.path.exists('results.json'):
+    with open('results.json', "w", encoding="utf-8") as file:
+        json.dump({'results': [], 'gold': 0, 'total_exp': 0}, file, ensure_ascii=False, indent=4)
+
+
 def save(player):
     level = player.level
     exp = player.total_exp
@@ -638,36 +643,53 @@ def save(player):
     sec = int(time % 60)
     time = f'{minutes}:{sec:02}'
     res = f'Уровень: {level} | Опыт: {exp} | Время: {time}'
-    if not os.path.exists('results.json'):
-        with open('results.json', "w", encoding="utf-8") as file:
-            json.dump({'results': []}, file, ensure_ascii=False, indent=4)
     with open('results.json', "r", encoding="utf-8") as file:
         data = json.load(file)
     data['results'].append(res)
+    data['total_exp'] += exp
+    data['gold'] = int(data['total_exp'] // 100)
     with open('results.json', "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=4)
 
 
-def load_results(filename):
+def load_data(filename):
     if not os.path.exists(filename):
         with open(filename, "w", encoding="utf-8") as file:
             json.dump({'results': []}, file, ensure_ascii=False, indent=4)
     with open(filename, "r", encoding="utf-8") as file:
         data = json.load(file)
-    return data['results']
+    return data
+
+
+message = pygame_gui.elements.UITextBox(
+    relative_rect=pygame.Rect((width // 2 - 100, height // 2 - 100), (200, 200)),
+    html_text="<font face=\"fira_code\" size=5 color=\"#FF0000\">Недостаточно душ</font><br>",
+    manager=manager)
+continue_btn = pygame_gui.elements.UIButton(
+    relative_rect=pygame.Rect((width // 2 - 90, height // 2 + 65), (180, 25)),
+    text='Продолжить',
+    manager=manager)
+message.hide()
+continue_btn.hide()
 
 
 def main_menu():
-    play_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 - 100, height - 65), (200, 50)),
-                                               text='Играть',
-                                               manager=manager)
+    gold_counter = pygame_gui.elements.UITextBox(
+        html_text=f"<font size=3 color=#FFFFFF>Души: {load_data('results.json')['gold']:02}</font>",
+        relative_rect=pygame.Rect((width // 2 - 365, height - 55), (75, 30)),
+        manager=manager)
+    play_button = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((width // 2 - 100, height - 65), (200, 50)),
+        text='Играть',
+        manager=manager)
     settings_button = pygame_gui.elements.UIButton(
         relative_rect=pygame.Rect((width // 2 - 275, height - 60), (150, 40)),
         text='Настройки',
         manager=manager)
-    records_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 + 125, height - 60), (150, 40)),
-                                                  text='Рекорды',
-                                                  manager=manager)
+    records_button = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((width // 2 + 125, height - 60), (150, 40)),
+        text='Рекорды',
+        manager=manager)
     music_text = pygame_gui.elements.UITextBox(
         relative_rect=pygame.Rect((width // 2 - 115, height // 2 - 50), (230, 300)),
         html_text="<font face=\"fira_code\" size=5 color=\"#FFFFFF\">Громкость музыки</font><br>",
@@ -689,7 +711,7 @@ def main_menu():
         relative_rect=pygame.Rect((width // 3, height - 80), (width // 3, 50)),
         text="Назад",
         manager=manager)
-    results = load_results('results.json')
+    results = load_data('results.json')['results']
     results.reverse()
     record_list = pygame_gui.elements.UISelectionList(
         relative_rect=pygame.Rect((width // 2 - 200, 70), (400, 300)),
@@ -702,13 +724,14 @@ def main_menu():
     slider.hide()
     music_text.hide()
     back_button.hide()
-    main_btns = [play_button, settings_button, records_button]
+    main_btns = [play_button, settings_button, records_button, gold_counter]
     blackout = pygame.Surface((width, height), pygame.SRCALPHA)
     blackout.fill((0, 0, 0, 0))
     pygame.draw.rect(blackout, (0, 0, 0, 100), blackout.get_rect())
     running = True
     is_settings = False
     is_records = False
+
     while running:
         time_delta = clock.tick(60) / 1000.0
         for event in pygame.event.get():
@@ -734,6 +757,12 @@ def main_menu():
                     for btn in main_btns:
                         btn.hide()
                     start_game()
+                    gold_counter = pygame_gui.elements.UITextBox(
+                        html_text=f"<font size=3 color=#FFFFFF>Души: {load_data('results.json')['gold']:02}</font>",
+                        relative_rect=pygame.Rect((width // 2 - 365, height - 55), (75, 30)),
+                        manager=manager)
+                    main_btns = main_btns[:4]
+                    main_btns.append(gold_counter)
                     for btn in main_btns:
                         btn.show()
                 elif event.ui_element == settings_button:
@@ -753,7 +782,7 @@ def main_menu():
                 elif event.ui_element == records_button:
                     for btn in main_btns:
                         btn.hide()
-                    results = load_results('results.json')
+                    results = load_data('results.json')['results']
                     results.reverse()
                     record_list = pygame_gui.elements.UISelectionList(
                         relative_rect=pygame.Rect((width // 2 - 200, 70), (400, 300)),
@@ -771,6 +800,9 @@ def main_menu():
                     for btn in main_btns:
                         btn.show()
                     is_records = False
+                elif event.ui_element == continue_btn:
+                    message.hide()
+                    continue_btn.hide()
 
             manager.process_events(event)
         manager.update(time_delta)
@@ -817,7 +849,7 @@ def start_game():
                         btn.kill()
                     is_paused = False
                 elif event.ui_element == quit_button:
-                    running = False  # write record
+                    running = False
                     quit_button.kill()
                     revive_button.kill()
                     text.kill()
@@ -826,11 +858,20 @@ def start_game():
                     clear_sprites()
                     continue
                 elif event.ui_element == revive_button:
-                    player.health = player.max_health
                     quit_button.kill()
                     revive_button.kill()
                     text.kill()
-                    is_paused = False
+                    if gold >= 10:
+                        player.health = player.max_health
+                        is_paused = False
+                    else:
+                        running = False
+                        player.total_time = timer
+                        save(player)
+                        clear_sprites()
+                        message.show()
+                        continue_btn.show()
+                        continue
 
             manager.process_events(event)
 
@@ -884,6 +925,7 @@ def start_game():
         manager.draw_ui(screen)
         if player.health <= 0:
             is_paused = True
+            gold = load_data('results.json')['gold']
             text = pygame_gui.elements.UITextBox(
                 relative_rect=pygame.Rect((width // 2 - 115, 200), (230, 300)),
                 html_text=(
@@ -892,7 +934,7 @@ def start_game():
                 ), manager=manager)
             revive_button = pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((width // 2 - 100, height // 2 - 65), (200, 50)),
-                text='Возрождение',
+                text='Возрождение (cost: 10 Душ)',
                 manager=manager)
             quit_button = pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((width // 2 - 100, height // 2 + 5), (200, 50)),
@@ -902,6 +944,12 @@ def start_game():
         if player.exp >= player.next_level_exp:
             lvlup_btns = attack_system.level_up()
             is_paused = True
+            with open('results.json', "r", encoding="utf-8") as file:
+                data = json.load(file)
+                data['gold'] -= 10
+                data['total_exp'] -= 1000
+            with open('results.json', "w", encoding="utf-8") as file:
+                json.dump(data, file, ensure_ascii=False, indent=4)
 
         pygame.display.flip()
         timer += 1 / FPS
