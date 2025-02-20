@@ -3,6 +3,7 @@ import os
 import sys
 import math
 import random
+import pygame_gui
 
 all_sprites = pygame.sprite.Group()
 player_group = pygame.sprite.Group()
@@ -11,9 +12,11 @@ enemy_group = pygame.sprite.Group()
 attacks_group = pygame.sprite.Group()
 effects_group = pygame.sprite.Group()
 pygame.init()
+pygame.display.set_caption('World of Souls')
 size = width, height = 1300, 800
 screen = pygame.display.set_mode(size)
 FPS = 60
+manager = pygame_gui.UIManager((width, height))
 
 
 def load_image(name, colorkey=None):
@@ -52,7 +55,7 @@ class Player(pygame.sprite.Sprite):
 
         self.health = 10
         self.max_health = 10
-        self.regen_speed = 0.2
+        self.regen_speed = 0.1
         self.speed = 8
         self.exp = 0
 
@@ -90,11 +93,12 @@ class Player(pygame.sprite.Sprite):
             dy *= 0.7071
 
         for sprite in all_sprites:
-            if sprite != self and isinstance(sprite, Enemy):
+            if sprite != self and isinstance(sprite, (
+                    Enemy, ExplosionByEnemy, ExplosionByMagicShot, ExplosionByFireball, HeavenStrike)):
                 sprite.rect.x -= dx * self.speed
                 sprite.rect.y -= dy * self.speed
         for sprite in attacks_group:
-            if sprite != self and isinstance(sprite, MagicShot):
+            if sprite != self and isinstance(sprite, (MagicShot, Fireball)):
                 sprite.pos -= pygame.math.Vector2(dx, dy) * self.speed
 
         targ_tile = min(tiles_group, key=lambda tile: (tile.rect.x, tile.rect.y))
@@ -172,14 +176,13 @@ class Enemy(pygame.sprite.Sprite):
         self.rect.center += self.velocity
 
         if pygame.sprite.collide_mask(self, self.player):
-            # Наносим урон игроку
             self.player.health -= 0.5 * (1 / FPS)
-            # Мягкое отталкивание
             diff = pygame.math.Vector2(self.rect.center) - self.player.rect.center
             if diff.magnitude() == 0:
                 diff += (1, 1)
             self.velocity += diff.normalize() * 0.3
         if self.health <= 0:
+            ExplosionByEnemy(self)
             self.kill()
 
     def apply_separation(self):
@@ -196,6 +199,114 @@ class Enemy(pygame.sprite.Sprite):
                 strength = (1 - distance / self.separation_radius) * 1.2
                 separation_force += diff.normalize() * strength
         self.velocity += separation_force
+
+
+class ExplosionByEnemy(pygame.sprite.Sprite):
+    def __init__(self, enemy):
+        super().__init__(all_sprites, effects_group)
+        self.frames = []
+        self.cut_sheet(load_image('explosions.png'), 11, 15)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.rect.center = enemy.rect.center
+        self.ticks_counter = 0
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                if j == 0:
+                    frame_location = (self.rect.w * i, self.rect.h * j)
+                    image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                    self.frames.append(image)
+
+    def update(self):
+        self.ticks_counter += 1
+        if self.ticks_counter % 4 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+        if self.ticks_counter == 11 * 4:
+            self.kill()
+
+
+class Fireball(pygame.sprite.Sprite):
+    def __init__(self, start_pos, direction, damage):
+        super().__init__(all_sprites, attacks_group)
+        self.speed = 8
+        self.frames = []
+        self.direction = pygame.math.Vector2(direction).normalize()
+        self.cut_sheet(load_image('Fireball.png'), 1, 3)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.damage = damage
+        self.ticks_counter = 0
+        self.rect.center = start_pos
+        self.mask = pygame.mask.from_surface(self.image)
+        self.pos = pygame.Vector2(self.rect.center)
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                angle = math.degrees(math.atan2(-self.direction.y, self.direction.x))
+                frame_location = (self.rect.w * i, self.rect.h * j)
+                image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                image = pygame.transform.rotate(image, angle)
+                self.frames.append(image)
+
+    def update(self):
+        self.ticks_counter += 1
+        if self.ticks_counter % 5 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+
+        self.pos += self.direction * self.speed
+        self.rect.center = (int(self.pos.x), int(self.pos.y))
+
+        if not (-100 < self.pos.x < width + 100 and -100 < self.pos.y < height + 100):
+            self.kill()
+
+        for enemy in enemy_group:
+            if pygame.sprite.collide_mask(self, enemy):
+                enemy.health -= self.damage
+                self.rect.center += self.direction * 50
+                ExplosionByFireball(self, self.damage)
+                self.kill()
+
+
+class ExplosionByFireball(pygame.sprite.Sprite):
+    def __init__(self, shot, damage):
+        super().__init__(all_sprites, effects_group)
+        self.frames = []
+        self.cut_sheet(load_image('fire_expl.png'), 10, 9)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.rect.center = shot.rect.center
+        self.ticks_counter = 0
+        self.damage = damage
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                if j == 0:
+                    frame_location = (self.rect.w * i, self.rect.h * j)
+                    image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                    self.frames.append(image)
+
+    def update(self):
+        self.ticks_counter += 1
+        if self.ticks_counter % 4 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+        for enemy in enemy_group:
+            if pygame.sprite.collide_mask(self, enemy):
+                enemy.health -= self.damage
+        if self.ticks_counter == 10 * 4:
+            self.kill()
 
 
 class MagicShot(pygame.sprite.Sprite):
@@ -225,9 +336,9 @@ class MagicShot(pygame.sprite.Sprite):
                     image = pygame.transform.rotate(image, angle)
                     self.frames.append(image)
 
-    def update(self, dt):
+    def update(self):
         self.ticks_counter += 1
-        if self.ticks_counter % 4 == 0:
+        if self.ticks_counter % 3 == 0:
             self.cur_frame = (self.cur_frame + 1) % len(self.frames)
             self.image = self.frames[self.cur_frame]
 
@@ -240,7 +351,73 @@ class MagicShot(pygame.sprite.Sprite):
         for enemy in enemy_group:
             if pygame.sprite.collide_mask(self, enemy):
                 enemy.health -= self.damage
+                self.rect.center += self.direction * 30
+                ExplosionByMagicShot(self)
                 self.kill()
+
+
+class ExplosionByMagicShot(pygame.sprite.Sprite):
+    def __init__(self, shot):
+        super().__init__(all_sprites, effects_group)
+        self.frames = []
+        self.cut_sheet(load_image('ms_expl.png'), 14, 9)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.rect.center = shot.rect.center
+        self.ticks_counter = 0
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                if j == 2:
+                    frame_location = (self.rect.w * i, self.rect.h * j)
+                    image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                    self.frames.append(image)
+
+    def update(self):
+        self.ticks_counter += 1
+        if self.ticks_counter % 2 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+        if self.ticks_counter == 14 * 2:
+            self.kill()
+
+
+class HeavenStrike(pygame.sprite.Sprite):
+    def __init__(self, pos, damage):
+        super().__init__(all_sprites, attacks_group)
+        self.frames = []
+        self.cut_sheet(load_image('HeavenStrike.png'), 6, 2)
+        self.cur_frame = 0
+        self.image = self.frames[self.cur_frame]
+        self.damage = damage
+        self.ticks_counter = 0
+        self.rect.center = pos
+        self.rect.y -= 25
+        self.mask = pygame.mask.from_surface(self.image)
+
+    def cut_sheet(self, sheet, columns, rows):
+        self.rect = pygame.Rect(0, 0, sheet.get_width() // columns,
+                                sheet.get_height() // rows)
+        for j in range(rows):
+            for i in range(columns):
+                frame_location = (self.rect.w * i, self.rect.h * j)
+                image = sheet.subsurface(pygame.Rect(frame_location, self.rect.size))
+                self.frames.append(image)
+
+    def update(self):
+        self.ticks_counter += 1
+        if self.ticks_counter % 5 == 0:
+            self.cur_frame = (self.cur_frame + 1) % len(self.frames)
+            self.image = self.frames[self.cur_frame]
+            if self.cur_frame == 0:
+                self.kill()
+
+        for enemy in enemy_group:
+            if pygame.sprite.collide_mask(self, enemy):
+                enemy.health -= self.damage
 
 
 class AttackSystem:
@@ -255,6 +432,22 @@ class AttackSystem:
                 'shots_count': 1,
                 'timer': 0.0,
                 'action': self.create_ms
+            },
+            'Fireball': {
+                'level': 1,
+                'cooldown': 2,
+                'damage': 20,
+                'shots_count': 1,
+                'timer': 0.0,
+                'action': self.create_fb
+            },
+            'HeavenStrike': {
+                'level': 1,
+                'cooldown': 3,
+                'damage': 15,
+                'shots_count': 1,
+                'timer': 0.0,
+                'action': self.create_hs
             }
         }
 
@@ -263,25 +456,46 @@ class AttackSystem:
             attack['timer'] += dt
             if attack['timer'] >= attack['cooldown'] * (0.9 ** attack['level']):
                 for _ in range(attack['shots_count']):
-                    attack['action']()  # qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
-                attack['timer'] = 0.0
+                    attack['action']()
+                attack['timer'] = 0
 
     def create_ms(self):
-        angle = random.uniform(0, 2 * math.pi)
         if enemy_group:
             nearest_enemy = min(self.enemy_group,
                                 key=lambda enemy: pygame.math.Vector2(self.player.rect.center).distance_to(
                                     enemy.rect.center))
             direction = pygame.math.Vector2(nearest_enemy.rect.center) - self.player.rect.center
+            if direction.magnitude() == 0:
+                direction += (1, 1)
             MagicShot(self.player.rect.center, direction, self.attacks['magic_shot']['damage'])
+
+    def create_fb(self):
+        if enemy_group:
+            nearest_enemy = min(self.enemy_group,
+                                key=lambda enemy: pygame.math.Vector2(self.player.rect.center).distance_to(
+                                    enemy.rect.center))
+            direction = pygame.math.Vector2(nearest_enemy.rect.center) - self.player.rect.center
+            if direction.magnitude() == 0:
+                direction += (1, 1)
+            Fireball(self.player.rect.center, direction, self.attacks['Fireball']['damage'])
+
+    def create_hs(self):
+        if enemy_group:
+            enemy_arr = sorted([e for e in self.enemy_group if
+                                pygame.math.Vector2(self.player.rect.center).distance_to(e.rect.center) < height // 2 - 50],
+                               key=lambda enemy: pygame.math.Vector2(self.player.rect.center).distance_to(
+                                   enemy.rect.center))
+            if enemy_arr:
+                targ_enemy = random.choice(enemy_arr)
+                HeavenStrike(targ_enemy.rect.center, self.attacks['HeavenStrike']['damage'])
 
 
 def draw_health_bar(screen, player):
-    bar_width = 200
-    bar_height = 20
+    bar_width = 50
+    bar_height = 2
     fill = (player.health / player.max_health) * bar_width
-    pygame.draw.rect(screen, (255, 0, 0), (10, 10, bar_width, bar_height))
-    pygame.draw.rect(screen, (0, 255, 0), (10, 10, fill, bar_height))
+    pygame.draw.rect(screen, (200, 0, 0), (player.rect.x + 5, player.rect.y - 20, bar_width, bar_height))
+    pygame.draw.rect(screen, (0, 150, 0), (player.rect.x + 5, player.rect.y - 20, fill, bar_height))
 
 
 class Tile(pygame.sprite.Sprite):
@@ -339,7 +553,7 @@ clock = pygame.time.Clock()
 running = True
 player = Player()
 infinity_world = InfinityWorld()
-enemy_spawn_rate = 1
+enemy_spawn_rate = 2
 enemy_spawn_count = 500
 ticks_counter = 0
 enemy_ticks_counter = 0
@@ -348,6 +562,7 @@ enemies_arr = []
 CELL_SIZE = 256
 attack_system = AttackSystem(player, enemy_group)
 while running:
+    time_delta = clock.tick(60) / 1000.0
     enemy_ticks_counter += 1
     current_time = pygame.time.get_ticks()
     for event in pygame.event.get():
@@ -355,11 +570,13 @@ while running:
             running = False
         elif event.type == pygame.KEYDOWN:
             pass
+        manager.process_events(event)
 
     keys = pygame.key.get_pressed()
     dx = keys[pygame.K_d] - keys[pygame.K_a]
     dy = keys[pygame.K_s] - keys[pygame.K_w]
 
+    manager.update(time_delta)
     player.update(dx, dy, infinity_world)
     infinity_world.update_tiles()
 
@@ -371,12 +588,13 @@ while running:
         spatial_grid[cell].append(enemy)
     for enemy in enemy_group:
         enemy.update()
-    hits = pygame.sprite.groupcollide(enemy_group, attacks_group, True, True)
+    hits = pygame.sprite.groupcollide(enemy_group, attacks_group, False, False)
     for enemy in hits:
         player.exp += 10
 
     for enemy in pygame.sprite.groupcollide(enemy_group, player_group, False, False):
         enemy.health -= 0.05
+    effects_group.update()
 
     next_enemy = FPS // enemy_spawn_rate
     if enemy_spawn_count:
@@ -387,14 +605,16 @@ while running:
             enemy_spawn_rate += 0.01
     attack_system.update(1 / FPS)
     for attack in attacks_group:
-        attack.update(1 / FPS)
+        attack.update()
 
     screen.fill((0, 0, 0))
     tiles_group.draw(screen)
     enemy_group.draw(screen)
     player_group.draw(screen)
     attacks_group.draw(screen)
+    effects_group.draw(screen)
+    draw_health_bar(screen, player)
+    manager.draw_ui(screen)
 
-    clock.tick(60)
     pygame.display.flip()
 pygame.quit()
