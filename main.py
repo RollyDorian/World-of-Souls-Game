@@ -4,6 +4,7 @@ import sys
 import math
 import random
 import pygame_gui
+import json
 
 all_sprites = pygame.sprite.Group()
 player_group = pygame.sprite.Group()
@@ -17,6 +18,13 @@ size = width, height = 1300, 800
 screen = pygame.display.set_mode(size)
 FPS = 60
 manager = pygame_gui.UIManager((width, height))
+manager.preload_fonts([{'name': 'noto_sans', 'point_size': 18, 'style': 'regular', 'antialiased': True}])
+clock = pygame.time.Clock()
+
+
+def clear_sprites():
+    for sprite in all_sprites:
+        sprite.kill()
 
 
 def load_image(name, colorkey=None):
@@ -53,11 +61,15 @@ class Player(pygame.sprite.Sprite):
         self.rect.centery = screen.height // 2
         self.mask = pygame.mask.from_surface(self.image)
 
-        self.health = 10
-        self.max_health = 10
+        self.health = 5
+        self.max_health = 5
         self.regen_speed = 0.1
         self.speed = 8
         self.exp = 0
+        self.total_exp = 0
+        self.next_level_exp = 50
+        self.level = 1
+        self.total_time = 0
 
     def update(self, dx, dy, infinity_world):
         self.ticks_counter += 1
@@ -176,13 +188,15 @@ class Enemy(pygame.sprite.Sprite):
         self.rect.center += self.velocity
 
         if pygame.sprite.collide_mask(self, self.player):
-            self.player.health -= 0.5 * (1 / FPS)
+            self.player.health -= 2 * (1 / FPS)
             diff = pygame.math.Vector2(self.rect.center) - self.player.rect.center
             if diff.magnitude() == 0:
                 diff += (1, 1)
             self.velocity += diff.normalize() * 0.3
         if self.health <= 0:
             ExplosionByEnemy(self)
+            self.player.exp += 10
+            self.player.total_exp += 10
             self.kill()
 
     def apply_separation(self):
@@ -430,34 +444,87 @@ class AttackSystem:
                 'cooldown': 1.2,
                 'damage': 10,
                 'shots_count': 1,
+                'shots_done': 0,
+                'cd_beetween_shots': 0.2,
                 'timer': 0.0,
+                'timer2': 0.0,
                 'action': self.create_ms
             },
             'Fireball': {
-                'level': 1,
+                'level': 0,
                 'cooldown': 2,
                 'damage': 20,
                 'shots_count': 1,
+                'shots_done': 0,
+                'cd_beetween_shots': 0.3,
                 'timer': 0.0,
+                'timer2': 0.0,
                 'action': self.create_fb
             },
             'HeavenStrike': {
-                'level': 1,
+                'level': 0,
                 'cooldown': 3,
                 'damage': 15,
                 'shots_count': 1,
+                'shots_done': 0,
+                'cd_beetween_shots': 0.2,
                 'timer': 0.0,
+                'timer2': 0.0,
                 'action': self.create_hs
             }
         }
 
     def update(self, dt):
         for attack in self.attacks.values():
+            if attack['level'] == 0:
+                continue
             attack['timer'] += dt
             if attack['timer'] >= attack['cooldown'] * (0.9 ** attack['level']):
-                for _ in range(attack['shots_count']):
+                attack['timer2'] += dt
+                if attack['timer2'] >= attack['cd_beetween_shots']:
                     attack['action']()
-                attack['timer'] = 0
+                    attack['timer2'] = 0
+                    attack['shots_done'] += 1
+                if attack['shots_done'] == attack['shots_count']:
+                    attack['timer'] = 0
+                    attack['shots_done'] = 0
+
+    def level_up(self):
+        self.player.exp = 0
+        self.player.level += 1
+        self.player.next_level_exp = int(self.player.next_level_exp * 1.5) // 10 * 10
+        improvments_arr = ['Level up Magic Shot', 'Level up Fireball', 'Level up Heaven Strike', 'Increase HP',
+                           'Increase Regeneration speed', 'Increase Speed']
+        random.shuffle(improvments_arr)
+        improvments_arr = improvments_arr[:3]
+        lvlup_btn1 = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 - 150, 200), (300, 80)),
+                                                  text=improvments_arr[0],
+                                                  manager=manager)
+        lvlup_btn2 = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 - 150, 345), (300, 80)),
+                                                  text=improvments_arr[1],
+                                                  manager=manager)
+        lvlup_btn3 = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 - 150, 490), (300, 80)),
+                                                  text=improvments_arr[2],
+                                                  manager=manager)
+        return lvlup_btn1, lvlup_btn2, lvlup_btn3
+
+    def improve(self, improvement):
+        attack = 0
+        if improvement == 'Level up Magic Shot':
+            attack = self.attacks['magic_shot']
+        elif improvement == 'Level up Fireball':
+            attack = self.attacks['Fireball']
+        elif improvement == 'Level up Heaven Strike':
+            attack = self.attacks['HeavenStrike']
+        elif improvement == 'Increase HP':
+            self.player.max_health *= 1.05
+            self.player.health *= 1.05
+        elif improvement == 'Increase Regeneration speed':
+            self.player.regen_speed *= 1.1
+        if attack:
+            attack['level'] += 1
+            if attack['level'] % 3 == 0:
+                attack['shots_count'] += 1
 
     def create_ms(self):
         if enemy_group:
@@ -482,7 +549,8 @@ class AttackSystem:
     def create_hs(self):
         if enemy_group:
             enemy_arr = sorted([e for e in self.enemy_group if
-                                pygame.math.Vector2(self.player.rect.center).distance_to(e.rect.center) < height // 2 - 50],
+                                pygame.math.Vector2(self.player.rect.center).distance_to(
+                                    e.rect.center) < height // 2 - 50],
                                key=lambda enemy: pygame.math.Vector2(self.player.rect.center).distance_to(
                                    enemy.rect.center))
             if enemy_arr:
@@ -496,6 +564,14 @@ def draw_health_bar(screen, player):
     fill = (player.health / player.max_health) * bar_width
     pygame.draw.rect(screen, (200, 0, 0), (player.rect.x + 5, player.rect.y - 20, bar_width, bar_height))
     pygame.draw.rect(screen, (0, 150, 0), (player.rect.x + 5, player.rect.y - 20, fill, bar_height))
+
+
+def draw_exp_bar(screen, player):
+    bar_width = 300
+    bar_height = 5
+    fill = (player.exp / player.next_level_exp) * bar_width
+    pygame.draw.rect(screen, pygame.Color('white'), (40, 20, bar_width, bar_height))
+    pygame.draw.rect(screen, pygame.Color(3, 223, 252), (40, 20, fill, bar_height))
 
 
 class Tile(pygame.sprite.Sprite):
@@ -549,72 +625,288 @@ def get_random_pos_enemy():
     return x, y
 
 
-clock = pygame.time.Clock()
-running = True
-player = Player()
-infinity_world = InfinityWorld()
-enemy_spawn_rate = 2
-enemy_spawn_count = 500
-ticks_counter = 0
-enemy_ticks_counter = 0
-starting_time = pygame.time.get_ticks()
-enemies_arr = []
+def terminate():
+    pygame.quit()
+    sys.exit()
+
+
+def save(player):
+    level = player.level
+    exp = player.total_exp
+    time = player.total_time
+    minutes = int(time // 60)
+    sec = int(time % 60)
+    time = f'{minutes}:{sec:02}'
+    res = f'Уровень: {level} | Опыт: {exp} | Время: {time}'
+    if not os.path.exists('results.json'):
+        with open('results.json', "w", encoding="utf-8") as file:
+            json.dump({'results': []}, file, ensure_ascii=False, indent=4)
+    with open('results.json', "r", encoding="utf-8") as file:
+        data = json.load(file)
+    data['results'].append(res)
+    with open('results.json', "w", encoding="utf-8") as file:
+        json.dump(data, file, ensure_ascii=False, indent=4)
+
+
+def load_results(filename):
+    if not os.path.exists(filename):
+        with open(filename, "w", encoding="utf-8") as file:
+            json.dump({'results': []}, file, ensure_ascii=False, indent=4)
+    with open(filename, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    return data['results']
+
+
+def main_menu():
+    play_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 - 100, height - 65), (200, 50)),
+                                               text='Играть',
+                                               manager=manager)
+    settings_button = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((width // 2 - 275, height - 60), (150, 40)),
+        text='Настройки',
+        manager=manager)
+    records_button = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((width // 2 + 125, height - 60), (150, 40)),
+                                                  text='Рекорды',
+                                                  manager=manager)
+    music_text = pygame_gui.elements.UITextBox(
+        relative_rect=pygame.Rect((width // 2 - 115, height // 2 - 50), (230, 300)),
+        html_text="<font face=\"fira_code\" size=5 color=\"#FFFFFF\">Громкость музыки</font><br>",
+        manager=manager)
+    slider = pygame_gui.elements.UIHorizontalSlider(
+        relative_rect=pygame.Rect((width // 2 - 100, height // 2), (200, 25)),
+        start_value=0,
+        value_range=(0, 100),
+        manager=manager)
+    back_button = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((width // 2 - 100, height // 2 + 200), (75, 25)),
+        text='Назад',
+        manager=manager)
+    title = pygame_gui.elements.UITextBox(
+        html_text="<font size=5 color=#FFFFFF>История игр</font>",
+        relative_rect=pygame.Rect((width // 2 - 200, 30), (400, 50)),
+        manager=manager)
+    back_button2 = pygame_gui.elements.UIButton(
+        relative_rect=pygame.Rect((width // 3, height - 80), (width // 3, 50)),
+        text="Назад",
+        manager=manager)
+    results = load_results('results.json')
+    results.reverse()
+    record_list = pygame_gui.elements.UISelectionList(
+        relative_rect=pygame.Rect((width // 2 - 200, 70), (400, 300)),
+        item_list=results,
+        manager=manager)
+    record_list.hide()
+    record_menu = [title, back_button2, record_list]
+    for x in record_menu:
+        x.hide()
+    slider.hide()
+    music_text.hide()
+    back_button.hide()
+    main_btns = [play_button, settings_button, records_button]
+    blackout = pygame.Surface((width, height), pygame.SRCALPHA)
+    blackout.fill((0, 0, 0, 0))
+    pygame.draw.rect(blackout, (0, 0, 0, 100), blackout.get_rect())
+    running = True
+    is_settings = False
+    is_records = False
+    while running:
+        time_delta = clock.tick(60) / 1000.0
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                terminate()
+            elif event.type == pygame.KEYDOWN:
+                if pygame.K_ESCAPE:
+                    if is_settings:
+                        slider.hide()
+                        music_text.hide()
+                        back_button.hide()
+                        is_settings = False
+                        for btn in main_btns:
+                            btn.show()
+                    elif is_records:
+                        for btn in record_menu:
+                            btn.hide()
+                        for btn in main_btns:
+                            btn.show()
+                        is_records = False
+            if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                if event.ui_element == play_button:
+                    for btn in main_btns:
+                        btn.hide()
+                    start_game()
+                    for btn in main_btns:
+                        btn.show()
+                elif event.ui_element == settings_button:
+                    for btn in main_btns:
+                        btn.hide()
+                    music_text.show()
+                    slider.show()
+                    back_button.show()
+                    is_settings = True
+                elif event.ui_element == back_button:
+                    slider.hide()
+                    music_text.hide()
+                    back_button.hide()
+                    is_settings = False
+                    for btn in main_btns:
+                        btn.show()
+                elif event.ui_element == records_button:
+                    for btn in main_btns:
+                        btn.hide()
+                    results = load_results('results.json')
+                    results.reverse()
+                    record_list = pygame_gui.elements.UISelectionList(
+                        relative_rect=pygame.Rect((width // 2 - 200, 70), (400, 300)),
+                        item_list=results,
+                        manager=manager)
+                    record_list.hide()
+                    record_menu = record_menu[:2]
+                    record_menu.append(record_list)
+                    for btn in record_menu:
+                        btn.show()
+                    is_records = True
+                elif event.ui_element == back_button2:
+                    for btn in record_menu:
+                        btn.hide()
+                    for btn in main_btns:
+                        btn.show()
+                    is_records = False
+
+            manager.process_events(event)
+        manager.update(time_delta)
+        screen.blit(mm_background, (0, 0))
+        manager.draw_ui(screen)
+        if is_settings or is_records:
+            screen.blit(blackout)
+
+        pygame.display.flip()
+
+
+def start_game():
+    is_paused = False
+    infinity_world = InfinityWorld()
+    player = Player()
+    attack_system = AttackSystem(player, enemy_group)
+    enemies_arr = []
+    enemy_spawn_rate = 2
+    enemy_spawn_count = 500
+    enemy_ticks_counter = 0
+    lvlup_btns = []
+    red_warning = pygame.Surface((width, height), pygame.SRCALPHA)
+    red_warning.fill((0, 0, 0, 0))
+    pygame.draw.rect(red_warning, (150, 0, 0, 50), red_warning.get_rect())
+    blackout = pygame.Surface((width, height), pygame.SRCALPHA)
+    blackout.fill((0, 0, 0, 0))
+    pygame.draw.rect(blackout, (0, 0, 0, 100), blackout.get_rect())
+    running = True
+    quit_button, revive_button, text = 0, 0, 0
+    timer = 0
+    while running:
+        time_delta = clock.tick(60) / 1000.0
+        enemy_ticks_counter += 1
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                terminate()
+            elif event.type == pygame.KEYDOWN:
+                pass
+            if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                if event.ui_element in lvlup_btns:
+                    improvement = event.ui_element.text
+                    attack_system.improve(improvement)
+                    for btn in lvlup_btns:
+                        btn.kill()
+                    is_paused = False
+                elif event.ui_element == quit_button:
+                    running = False  # write record
+                    quit_button.kill()
+                    revive_button.kill()
+                    text.kill()
+                    player.total_time = timer
+                    save(player)
+                    clear_sprites()
+                    continue
+                elif event.ui_element == revive_button:
+                    player.health = player.max_health
+                    quit_button.kill()
+                    revive_button.kill()
+                    text.kill()
+                    is_paused = False
+
+            manager.process_events(event)
+
+        keys = pygame.key.get_pressed()
+        if is_paused:
+            manager.update(time_delta)
+
+            screen.fill((0, 0, 0))
+            tiles_group.draw(screen)
+            enemy_group.draw(screen)
+            player_group.draw(screen)
+            attacks_group.draw(screen)
+            effects_group.draw(screen)
+            draw_health_bar(screen, player)
+            screen.blit(blackout)
+            manager.draw_ui(screen)
+
+            pygame.display.flip()
+            continue
+        dx = keys[pygame.K_d] - keys[pygame.K_a]
+        dy = keys[pygame.K_s] - keys[pygame.K_w]
+
+        manager.update(time_delta)
+        player.update(dx, dy, infinity_world)
+        infinity_world.update_tiles()
+        enemy_group.update()
+        '''for enemy in pygame.sprite.groupcollide(enemy_group, player_group, False, False):
+            enemy.health -= 0.05'''  # DISABLED
+        effects_group.update()
+
+        next_enemy = FPS // enemy_spawn_rate
+        if enemy_spawn_count:
+            if enemy_ticks_counter >= next_enemy:
+                enemy_ticks_counter = 0
+                enemy_spawn_count -= 0
+                enemies_arr.append(Enemy(player, 2, 1, get_random_pos_enemy()))
+                enemy_spawn_rate += 0.01
+        attack_system.update(1 / FPS)
+        attacks_group.update()
+
+        screen.fill((0, 0, 0))
+        tiles_group.draw(screen)
+        enemy_group.draw(screen)
+        player_group.draw(screen)
+        attacks_group.draw(screen)
+        effects_group.draw(screen)
+        draw_health_bar(screen, player)
+        draw_exp_bar(screen, player)
+        if player.health / player.max_health <= 0.3:
+            screen.blit(red_warning)
+        manager.draw_ui(screen)
+        if player.health <= 0:
+            is_paused = True
+            text = pygame_gui.elements.UITextBox(
+                relative_rect=pygame.Rect((width // 2 - 115, 200), (230, 300)),
+                html_text=(
+                    "<font face=\"fira_code\" size=5 color=\"#FF0000\">Вы на грани!</font><br>"
+                    "<font face=\"fira_code\" size=3 color=\"#FFFFFF\">Жизнь или смерть?</font>"
+                ), manager=manager)
+            revive_button = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((width // 2 - 100, height // 2 - 65), (200, 50)),
+                text='Возрождение',
+                manager=manager)
+            quit_button = pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((width // 2 - 100, height // 2 + 5), (200, 50)),
+                text='Выход',
+                manager=manager)
+            continue
+        if player.exp >= player.next_level_exp:
+            lvlup_btns = attack_system.level_up()
+            is_paused = True
+
+        pygame.display.flip()
+        timer += 1 / FPS
+
+
+mm_background = load_image('MainMenu.png')
 CELL_SIZE = 256
-attack_system = AttackSystem(player, enemy_group)
-while running:
-    time_delta = clock.tick(60) / 1000.0
-    enemy_ticks_counter += 1
-    current_time = pygame.time.get_ticks()
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-        elif event.type == pygame.KEYDOWN:
-            pass
-        manager.process_events(event)
-
-    keys = pygame.key.get_pressed()
-    dx = keys[pygame.K_d] - keys[pygame.K_a]
-    dy = keys[pygame.K_s] - keys[pygame.K_w]
-
-    manager.update(time_delta)
-    player.update(dx, dy, infinity_world)
-    infinity_world.update_tiles()
-
-    spatial_grid = {}
-    for enemy in enemy_group:
-        cell = (enemy.rect.x // CELL_SIZE, enemy.rect.y // CELL_SIZE)
-        if cell not in spatial_grid:
-            spatial_grid[cell] = []
-        spatial_grid[cell].append(enemy)
-    for enemy in enemy_group:
-        enemy.update()
-    hits = pygame.sprite.groupcollide(enemy_group, attacks_group, False, False)
-    for enemy in hits:
-        player.exp += 10
-
-    for enemy in pygame.sprite.groupcollide(enemy_group, player_group, False, False):
-        enemy.health -= 0.05
-    effects_group.update()
-
-    next_enemy = FPS // enemy_spawn_rate
-    if enemy_spawn_count:
-        if enemy_ticks_counter == next_enemy:
-            enemy_ticks_counter = 0
-            enemy_spawn_count -= 1
-            enemies_arr.append(Enemy(player, 2, 1, get_random_pos_enemy()))
-            enemy_spawn_rate += 0.01
-    attack_system.update(1 / FPS)
-    for attack in attacks_group:
-        attack.update()
-
-    screen.fill((0, 0, 0))
-    tiles_group.draw(screen)
-    enemy_group.draw(screen)
-    player_group.draw(screen)
-    attacks_group.draw(screen)
-    effects_group.draw(screen)
-    draw_health_bar(screen, player)
-    manager.draw_ui(screen)
-
-    pygame.display.flip()
-pygame.quit()
+main_menu()
